@@ -1,0 +1,4 @@
+build/*
+dist/*
+*.pyc
+flyem_syn_eval.egg-info/*

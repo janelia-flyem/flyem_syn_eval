@@ -28,7 +28,8 @@ def cx_synapse_groundtruth(roi_suffix):
                      'roi_cx1_%s' % roi_suffix)
 
 def evaluate_pr(tbars_pd, tbars_gt,
-                dist_thresh=27, conf_thresholds=None):
+                dist_thresh=27, conf_thresholds=None,
+                segm_dvid=None):
 
     tbars_pd = tbars_pd.get_tbars()
     tbars_gt = tbars_gt.get_tbars(1.)
@@ -37,10 +38,32 @@ def evaluate_pr(tbars_pd, tbars_gt,
         cc = np.unique(tbars_pd.conf)
         conf_thresholds = (cc[1:]+cc[:-1])/2
 
+    if segm_dvid is not None:
+        segm_dvid_node = DVIDNodeService(
+            segm_dvid[0], segm_dvid[1],
+            'flyem_syn_eval', 'flyem_syn_eval')
+        segm_dvid_segm = segm_dvid[2]
+
+        lbls_pd = get_labels(segm_dvid_node, segm_dvid_segm, tbars_pd)
+        lbls_gt = get_labels(segm_dvid_node, segm_dvid_segm, tbars_gt)
+    else:
+        lbls_pd = None
+        lbls_gt = None
+
     result = obj_pr_curve(tbars_pd, tbars_gt,
-                          dist_thresh, conf_thresholds)
+                          dist_thresh, conf_thresholds,
+                          lbls_pd, lbls_gt)
     return result
 
+
+def get_labels(dvid_node, segm_name, tbars_in):
+    ll = dvid_node.custom_request(
+        '%s/labels' % segm_name,
+        json.dumps(
+            tbars_in.pos.astype('int').tolist()).encode('utf-8'),
+        ConnectionMethod.GET)
+    ll = json.loads(ll.decode('utf-8'))
+    return np.asarray(ll)
 
 def get_synapses_dvid(dvid_server, dvid_uuid, dvid_annot, dvid_roi):
     dvid_node = DVIDNodeService(dvid_server, dvid_uuid,
@@ -48,7 +71,7 @@ def get_synapses_dvid(dvid_server, dvid_uuid, dvid_annot, dvid_roi):
     synapses_json = dvid_node.custom_request(
         '%s/roi/%s' % (dvid_annot, dvid_roi),
         None, ConnectionMethod.GET)
-    return synapses_json
+    return synapses_json.decode('utf-8')
 
 def tbars_from_dvid(dvid_server, dvid_uuid, dvid_annot, dvid_roi,
                     conf_filter=None):
@@ -57,7 +80,7 @@ def tbars_from_dvid(dvid_server, dvid_uuid, dvid_annot, dvid_roi,
     return tbars_from_json(synapses_json, conf_filter)
 
 def tbars_from_json(synapses_json, conf_filter=None):
-    if isinstance(synapses_json, str):
+    if isinstance(synapses_json, basestring):
         if os.path.isfile(synapses_json):
             with open(synapses_json) as json_file:
                 synapses = json.load(json_file)
@@ -72,7 +95,7 @@ def tbars_from_json(synapses_json, conf_filter=None):
         if synapse['Kind'] != 'PreSyn':
             continue
 
-        if synapse['Prop'].has_key('conf'):
+        if 'conf' in synapse['Prop']:
             cc = float(synapse['Prop']['conf'])
         else:
             cc = 1.0
@@ -89,6 +112,7 @@ def tbars_from_json(synapses_json, conf_filter=None):
 
 
 def obj_pr_curve(predict, groundtruth, dist_thresh, thresholds,
+                 predict_lbls=None, groundtruth_lbls=None,
                  allow_mult=False):
 
     predict_locs     = predict.pos
@@ -102,11 +126,18 @@ def obj_pr_curve(predict, groundtruth, dist_thresh, thresholds,
     pp       = np.zeros( (n_thd,) )
     rr       = np.zeros( (n_thd,) )
 
+    predict_lbls_iter = None
+
     for ii in range(thresholds.size):
-        predict_locs_iter = predict_locs[
-            predict_conf >= thresholds[ii],:]
+        predict_idx = (predict_conf >= thresholds[ii])
+        predict_locs_iter = predict_locs[predict_idx,:]
+        if predict_lbls is not None:
+            predict_lbls_iter = predict_lbls[predict_idx]
+
         mm = obj_pr(predict_locs_iter, groundtruth_locs,
-                    dist_thresh, allow_mult=allow_mult)
+                    dist_thresh,
+                    predict_lbls_iter, groundtruth_lbls,
+                    allow_mult=allow_mult)
         num_tp[  ii] = mm.num_tp
         tot_pred[ii] = mm.tot_pred
         tot_gt[  ii] = mm.tot_gt
@@ -117,6 +148,7 @@ def obj_pr_curve(predict, groundtruth, dist_thresh, thresholds,
                      pp=pp, rr=rr, match=None)
 
 def obj_pr(predict_locs, groundtruth_locs, dist_thresh,
+           predict_lbls=None, groundtruth_lbls=None,
            allow_mult=False):
 
     if( (predict_locs.shape[0] == 0) |
@@ -139,6 +171,12 @@ def obj_pr(predict_locs, groundtruth_locs, dist_thresh,
 
     dists    = np.sqrt( ((pred-gt)**2).sum(axis=2) )
     dists   -= dist_thresh
+
+    if predict_lbls is not None:
+        lbl_constraint = (
+            predict_lbls.reshape( (-1,1) ) !=
+            groundtruth_lbls.reshape( (1,-1) ) ).astype('float32')
+        dists += (dist_thresh+1.) * lbl_constraint
 
     match    = obj_match(dists, allow_mult=allow_mult)
 

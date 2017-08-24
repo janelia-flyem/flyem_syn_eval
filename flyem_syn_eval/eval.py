@@ -2,7 +2,7 @@ from libdvid import DVIDNodeService, ConnectionMethod
 import pulp
 import numpy as np
 from collections import namedtuple
-import json, os
+import json, os, sys
 
 class Tbar_Info(namedtuple('Tbar_Info',
                            ['annot','server','uuid','roi'])):
@@ -60,9 +60,9 @@ def get_labels(dvid_node, segm_name, tbars_in):
     ll = dvid_node.custom_request(
         '%s/labels' % segm_name,
         json.dumps(
-            tbars_in.pos.astype('int').tolist()).encode('utf-8'),
+            tbars_in.pos.astype('int').tolist()).encode(),
         ConnectionMethod.GET)
-    ll = json.loads(ll.decode('utf-8'))
+    ll = json.loads(ll.decode())
     return np.asarray(ll)
 
 def get_synapses_dvid(dvid_server, dvid_uuid, dvid_annot, dvid_roi):
@@ -71,7 +71,7 @@ def get_synapses_dvid(dvid_server, dvid_uuid, dvid_annot, dvid_roi):
     synapses_json = dvid_node.custom_request(
         '%s/roi/%s' % (dvid_annot, dvid_roi),
         None, ConnectionMethod.GET)
-    return synapses_json.decode('utf-8')
+    return synapses_json.decode()
 
 def tbars_from_dvid(dvid_server, dvid_uuid, dvid_annot, dvid_roi,
                     conf_filter=None):
@@ -80,7 +80,11 @@ def tbars_from_dvid(dvid_server, dvid_uuid, dvid_annot, dvid_roi,
     return tbars_from_json(synapses_json, conf_filter)
 
 def tbars_from_json(synapses_json, conf_filter=None):
-    if isinstance(synapses_json, basestring):
+    if sys.version_info[0] >= 3:
+        is_str = isinstance(synapses_json, str)
+    else:
+        is_str = isinstance(synapses_json, basestring)
+    if is_str:
         if os.path.isfile(synapses_json):
             with open(synapses_json) as json_file:
                 synapses = json.load(json_file)

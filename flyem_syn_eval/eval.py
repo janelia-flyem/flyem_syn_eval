@@ -20,7 +20,7 @@ class Tbar_Info(namedtuple('Tbar_Info',
         return tbars_out
 Tbars = namedtuple('Tbar', 'pos conf')
 PR_Result = namedtuple(
-    'PR_Result', 'num_tp tot_pred tot_gt pp rr match')
+    'PR_Result', 'num_tp tot_pred tot_gt pp rr dist match')
 
 def cx_synapse_groundtruth(roi_suffix):
     return Tbar_Info('combined_synapses_08302016',
@@ -129,6 +129,7 @@ def obj_pr_curve(predict, groundtruth, dist_thresh, thresholds,
     tot_gt   = np.zeros( (n_thd,) )
     pp       = np.zeros( (n_thd,) )
     rr       = np.zeros( (n_thd,) )
+    dist     = np.zeros( (n_thd,3) )
 
     predict_lbls_iter = None
 
@@ -147,9 +148,10 @@ def obj_pr_curve(predict, groundtruth, dist_thresh, thresholds,
         tot_gt[  ii] = mm.tot_gt
         pp[      ii] = mm.pp
         rr[      ii] = mm.rr
+        dist[  ii,:] = mm.dist
 
     return PR_Result(num_tp=num_tp, tot_pred=tot_pred, tot_gt=tot_gt,
-                     pp=pp, rr=rr, match=None)
+                     pp=pp, rr=rr, dist=dist, match=None)
 
 def obj_pr(predict_locs, groundtruth_locs, dist_thresh,
            predict_lbls=None, groundtruth_lbls=None,
@@ -168,7 +170,7 @@ def obj_pr(predict_locs, groundtruth_locs, dist_thresh,
             rr = 1
 
         return PR_Result(num_tp=0, tot_pred=tot_pred, tot_gt=tot_gt,
-                         pp=pp, rr=rr, match=None)
+                         pp=pp, rr=rr, dist=0, match=None)
 
     pred     = predict_locs.reshape(     (-1, 1,3) )
     gt       = groundtruth_locs.reshape( ( 1,-1,3) )
@@ -182,16 +184,21 @@ def obj_pr(predict_locs, groundtruth_locs, dist_thresh,
             groundtruth_lbls.reshape( (1,-1) ) ).astype('float32')
         dists += (dist_thresh+1.) * lbl_constraint
 
-    match    = obj_match(dists, allow_mult=allow_mult)
+    match, mlp = obj_match(dists, allow_mult=allow_mult)
 
     num_tp   = float(match.sum())
     pd_mult  = np.maximum(match.sum(axis=1) - 1,0).sum()
     tot_pred = match.shape[0] + pd_mult
 
+    dist     = 0
+    if num_tp > 0:
+        matched_dists = dists[match] + dist_thresh
+        dist = np.percentile(matched_dists, [5,50,95])
+
     result   = PR_Result(
         num_tp=num_tp, tot_pred=tot_pred, tot_gt=match.shape[1],
         pp=num_tp/match.shape[0], rr=num_tp/match.shape[1],
-        match=match)
+        dist=dist, match=match)
 
     return result
 
@@ -249,4 +256,4 @@ def obj_match(dists, allow_mult=False):
                 obj_matches[ii,jj] = match_vars[
                     'x_%d_%d' % (ii, jj)].varValue
 
-    return obj_matches
+    return (obj_matches, match)
